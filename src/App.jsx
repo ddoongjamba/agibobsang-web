@@ -461,8 +461,7 @@ const AppLandingPage = () => {
             <div className="flex items-center justify-center md:justify-start gap-2 mb-4 text-white font-bold text-xl">
               <ChefHat /> 아기밥상
             </div>
-            <p className="text-sm mb-2">사업자등록번호: 123-45-67890 | 대표: 홍길동</p>
-            <p className="text-sm">이메일: help@babyfood.com</p>
+            <p className="text-sm">이메일: yahjbc@gmail.com</p>
             <p className="text-xs mt-4 text-gray-500">© 2024 BabyFood App. All rights reserved.</p>
           </div>
           <div className="flex gap-6">
