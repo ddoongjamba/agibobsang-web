@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Star, ChefHat, Calendar, Baby, X, Menu, ChevronRight, CheckCircle, MessageCircle, Send, User } from 'lucide-react';
+import { Download, Star, ChefHat, Calendar, Baby, X, Menu, ChevronRight, CheckCircle, MessageCircle, Send, User, Trash2 } from 'lucide-react'; // Trash2 아이콘 추가
 import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, query, orderBy } from "firebase/firestore";
+import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, query, deleteDoc, doc } from "firebase/firestore"; // deleteDoc, doc 추가
 
 // ------------------------------------------------------------------
-// [중요] 1단계에서 복사한 'firebaseConfig' 내용을 아래 괄호 안에 붙여넣으세요!
+// [중요] 여기에 본인의 'firebaseConfig' 내용을 붙여넣으세요!
 // ------------------------------------------------------------------
 const firebaseConfig = {
+  // 예시: apiKey: "AIzaSyD...",
+  // 여기에 복사한 내용을 채워넣으세요. (중괄호 {}는 남겨두거나 덮어씌워도 됩니다)
   apiKey: "AIzaSyCdmUliUBDtAA8pWNRdHmqmDPMngHfbV88",
   authDomain: "agibobsang-web.firebaseapp.com",
   projectId: "agibobsang-web",
@@ -28,7 +30,7 @@ const AppLandingPage = () => {
   const [posts, setPosts] = useState([]);
   const [nickname, setNickname] = useState('');
   const [content, setContent] = useState('');
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(null); // Firebase User (익명 로그인)
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
@@ -40,41 +42,49 @@ const AppLandingPage = () => {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Firebase 인증 및 데이터 로드
+  // Firebase 인증 및 데이터 로드 (익명 로그인)
   useEffect(() => {
-    if (!auth) return;
+    if (!auth) {
+      console.warn("Firebase Auth가 초기화되지 않았습니다. Firebase config를 확인해주세요.");
+      return;
+    }
 
-    signInAnonymously(auth).catch((error) => console.error("Auth Error:", error));
+    signInAnonymously(auth).catch((error) => console.error("Firebase Auth Error:", error));
 
-    return onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
+      if (!currentUser) {
+        console.log("익명 로그인 실패 또는 로그아웃.");
+      }
     });
-  }, []);
+
+    return () => unsubscribeAuth();
+  }, [auth]); // auth가 변경될 때만 재실행
 
   // 게시글 실시간 동기화
   useEffect(() => {
-    if (!db) return;
+    if (!db) {
+      console.warn("Firestore Database가 초기화되지 않았습니다. Firebase config를 확인해주세요.");
+      return;
+    }
 
-    // 내 프로젝트이므로 경로를 단순하게 'board_posts'로 사용합니다.
-    // (주의: Firestore에서 컬렉션 ID를 'board_posts'로 자동 생성합니다)
     const postsRef = collection(db, 'board_posts');
+    const q = query(postsRef); // Firebase에서는 기본적으로 id 순서대로 가져오므로, 클라이언트에서 정렬
 
-    // 쿼리: 시간순 정렬 (JS에서 처리하거나 인덱스 생성 후 orderBy 사용)
-    // 여기서는 간단하게 데이터를 가져온 후 클라이언트에서 정렬합니다.
-    const q = query(postsRef);
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribeSnapshot = onSnapshot(q, (snapshot) => {
       const loadedPosts = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-      // 최신순 정렬
+      // 최신순 정렬 (createdAt 필드 사용)
       loadedPosts.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setPosts(loadedPosts);
+    }, (error) => {
+      console.error("Firestore Data Fetch Error:", error);
     });
 
-    return () => unsubscribe();
-  }, [db]);
+    return () => unsubscribeSnapshot();
+  }, [db]); // db가 변경될 때만 재실행
 
   const handleSubmitPost = async (e) => {
     e.preventDefault();
@@ -82,8 +92,8 @@ const AppLandingPage = () => {
       alert("닉네임과 내용을 모두 입력해주세요!");
       return;
     }
-    if (!db) {
-      alert("Firebase 설정이 완료되지 않았습니다. 코드를 확인해주세요.");
+    if (!db || !user) { // user가 null이면 익명 로그인 안 된 상태
+      alert("게시판 서버 연결 중입니다. 잠시 후 다시 시도해주세요.");
       return;
     }
 
@@ -93,16 +103,41 @@ const AppLandingPage = () => {
         nickname: nickname,
         content: content,
         createdAt: serverTimestamp(),
-        uid: user ? user.uid : 'anonymous'
+        uid: user.uid // 글 작성자의 UID 저장 (삭제 권한 부여용)
       });
-      setContent('');
+      setContent(''); // 내용 초기화
     } catch (error) {
       console.error("Error adding document: ", error);
-      alert("글 작성 실패! (Firestore 규칙을 확인하세요)");
+      alert("글 작성 실패! (콘솔 에러를 확인하고, Firebase 규칙을 확인하세요)");
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  // 게시글 삭제 핸들러
+  const handleDeletePost = async (postId, postUid) => {
+    if (!db || !user) {
+      alert("삭제 권한이 없습니다. 다시 로그인 해주세요.");
+      return;
+    }
+    // 본인이 작성한 글이 아니거나, 어드민 권한이 없을 경우 삭제 불가 (현재는 본인 글만 가능)
+    if (user.uid !== postUid) {
+      alert("자신이 작성한 글만 삭제할 수 있습니다.");
+      return;
+    }
+
+    if (window.confirm("정말로 이 글을 삭제하시겠습니까?")) {
+      try {
+        await deleteDoc(doc(db, 'board_posts', postId));
+        // 삭제 후 UI는 onSnapshot에 의해 자동으로 업데이트됨
+        alert("글이 삭제되었습니다.");
+      } catch (error) {
+        console.error("Error removing document: ", error);
+        alert("글 삭제에 실패했습니다.");
+      }
+    }
+  };
+
 
   const scrollToSection = (id) => {
     const element = document.getElementById(id);
@@ -326,8 +361,8 @@ const AppLandingPage = () => {
                       value={content}
                       onChange={(e) => setContent(e.target.value)}
                       placeholder="이유식 시작하려니 막막하네요~ 다들 화이팅입니다!"
-                      rows="4"
-                      className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none transition bg-gray-50 resize-none"
+                      rows="7" // 세로 크기 확대
+                      className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none transition bg-gray-50 resize-y" // 가로 확장
                     ></textarea>
                   </div>
                   <button
@@ -361,13 +396,22 @@ const AppLandingPage = () => {
                           </div>
                           <span className="font-bold text-gray-800 text-sm">{post.nickname}</span>
                         </div>
-                        <span className="text-xs text-gray-400">
-                          {post.createdAt?.seconds ? new Date(post.createdAt.seconds * 1000).toLocaleDateString() : '방금 전'}
-                        </span>
+                        {/* 삭제 버튼: 글 작성자와 현재 로그인한 user의 UID가 같을 때만 표시 */}
+                        {user && user.uid === post.uid && (
+                          <button
+                            onClick={() => handleDeletePost(post.id, post.uid)}
+                            className="text-gray-400 hover:text-red-500 transition ml-auto p-1 rounded-full hover:bg-red-50"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        )}
                       </div>
                       <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap flex-grow">
                         {post.content}
                       </p>
+                      <span className="text-xs text-gray-400 mt-2 text-right">
+                        {post.createdAt?.seconds ? new Date(post.createdAt.seconds * 1000).toLocaleString() : '방금 전'}
+                      </span>
                     </div>
                   ))
                 )}
