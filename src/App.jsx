@@ -1,21 +1,119 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Star, ChefHat, Calendar, Baby, ArrowRight, CheckCircle, Menu, X, ChevronRight } from 'lucide-react';
+import { Download, Star, ChefHat, Calendar, Baby, X, Menu, ChevronRight, CheckCircle, MessageCircle, Send, User } from 'lucide-react';
+import { initializeApp } from "firebase/app";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, query } from "firebase/firestore";
+
+// --- Firebase 설정 및 초기화 (환경 변수 사용) ---
+const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
+// 로컬 개발 환경 등에서 config가 없을 경우를 대비한 예외 처리 (빈 객체면 초기화 안 함)
+const app = Object.keys(firebaseConfig).length > 0 ? initializeApp(firebaseConfig) : null;
+const auth = app ? getAuth(app) : null;
+const db = app ? getFirestore(app) : null;
+const appId = window.__app_id || 'default-app-id';
 
 const AppLandingPage = () => {
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  // 게시판 관련 상태
+  const [posts, setPosts] = useState([]);
+  const [nickname, setNickname] = useState('');
+  const [content, setContent] = useState('');
+  const [user, setUser] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // 스크롤 감지
   useEffect(() => {
     const handleScroll = () => {
-      if (window.scrollY > 10) {
-        setIsScrolled(true);
-      } else {
-        setIsScrolled(false);
-      }
+      if (window.scrollY > 10) setIsScrolled(true);
+      else setIsScrolled(false);
     };
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // --- Firebase Auth 및 데이터 로드 ---
+  useEffect(() => {
+    if (!auth) return;
+
+    // 1. 익명 로그인 시도
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (error) {
+        console.error("Auth Error:", error);
+      }
+    };
+    initAuth();
+
+    // 2. 인증 상태 확인
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+
+    return () => unsubscribeAuth();
+  }, []);
+
+  // 3. 게시글 실시간 동기화 (로그인 된 상태에서만)
+  useEffect(() => {
+    if (!user || !db) return;
+
+    // 경로 규칙 준수: artifacts/{appId}/public/data/board_posts
+    const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'board_posts');
+
+    // 쿼리: 정렬은 JS에서 처리 (복합 쿼리 제한 때문)
+    const q = query(postsRef);
+
+    const unsubscribeData = onSnapshot(q, (snapshot) => {
+      const loadedPosts = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      // 최신순 정렬 (createdAt 기준 내림차순)
+      loadedPosts.sort((a, b) => {
+        const dateA = a.createdAt?.seconds || 0;
+        const dateB = b.createdAt?.seconds || 0;
+        return dateB - dateA;
+      });
+      setPosts(loadedPosts);
+    }, (error) => {
+      console.error("Data Fetch Error:", error);
+    });
+
+    return () => unsubscribeData();
+  }, [user]);
+
+  // --- 게시글 작성 핸들러 ---
+  const handleSubmitPost = async (e) => {
+    e.preventDefault();
+    if (!content.trim() || !nickname.trim()) {
+      alert("닉네임과 내용을 모두 입력해주세요!");
+      return;
+    }
+    if (!db || !user) {
+      alert("게시판 서버 연결 중입니다. 잠시 후 다시 시도해주세요.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'board_posts');
+      await addDoc(postsRef, {
+        nickname: nickname,
+        content: content,
+        createdAt: serverTimestamp(),
+        uid: user.uid // 작성자 구분용 (선택)
+      });
+      setContent(''); // 내용 초기화 (닉네임은 유지)
+      // alert("글이 등록되었습니다!"); 
+    } catch (error) {
+      console.error("Write Error:", error);
+      alert("글 작성에 실패했습니다.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const scrollToSection = (id) => {
     const element = document.getElementById(id);
@@ -44,6 +142,7 @@ const AppLandingPage = () => {
           {/* 데스크탑 메뉴 */}
           <div className="hidden md:flex space-x-8 items-center">
             <button onClick={() => scrollToSection('features')} className="text-gray-600 hover:text-orange-500 transition font-medium">주요 기능</button>
+            <button onClick={() => scrollToSection('board')} className="text-gray-600 hover:text-orange-500 transition font-medium flex items-center gap-1"><MessageCircle size={18} /> 육아톡톡</button>
             <button onClick={() => scrollToSection('reviews')} className="text-gray-600 hover:text-orange-500 transition font-medium">생생 후기</button>
             <button onClick={openPlayStore} className="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2 rounded-full font-bold transition shadow-lg flex items-center gap-2">
               앱 다운로드 <Download size={16} />
@@ -62,15 +161,15 @@ const AppLandingPage = () => {
         {mobileMenuOpen && (
           <div className="md:hidden bg-white absolute top-full left-0 w-full shadow-lg border-t border-gray-100 flex flex-col p-4 space-y-4">
             <button onClick={() => scrollToSection('features')} className="text-left text-gray-600 font-medium py-2">주요 기능</button>
+            <button onClick={() => scrollToSection('board')} className="text-left text-gray-600 font-medium py-2">육아톡톡 (게시판)</button>
             <button onClick={() => scrollToSection('reviews')} className="text-left text-gray-600 font-medium py-2">생생 후기</button>
             <button onClick={openPlayStore} className="bg-orange-500 text-white py-3 rounded-lg font-bold text-center">앱 다운로드하기</button>
           </div>
         )}
       </nav>
 
-      {/* 히어로 섹션 (메인) */}
+      {/* 히어로 섹션 */}
       <header className="relative pt-32 pb-20 md:pt-48 md:pb-32 overflow-hidden">
-        {/* 배경 장식 요소 */}
         <div className="absolute top-0 right-0 -mr-20 -mt-20 w-96 h-96 bg-orange-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
         <div className="absolute top-0 left-0 -ml-20 -mt-20 w-96 h-96 bg-yellow-200 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
 
@@ -93,7 +192,6 @@ const AppLandingPage = () => {
                 className="flex items-center justify-center gap-3 bg-black text-white px-6 py-3.5 rounded-xl hover:bg-gray-800 transition shadow-xl hover:shadow-2xl transform hover:-translate-y-1"
               >
                 <img src="https://upload.wikimedia.org/wikipedia/commons/7/78/Google_Play_Store_badge_EN.svg" alt="Google Play" className="h-8" />
-                {/* 텍스트 대신 뱃지 이미지 활용 느낌 */}
               </button>
               <button
                 onClick={() => alert("iOS 버전은 준비 중입니다!")}
@@ -108,14 +206,13 @@ const AppLandingPage = () => {
           </div>
 
           <div className="md:w-1/2 z-10 relative">
-            {/* 앱 목업 이미지 (CSS로 구현) */}
+            {/* 앱 목업 이미지 */}
             <div className="relative mx-auto border-gray-800 bg-gray-800 border-[14px] rounded-[2.5rem] h-[600px] w-[300px] shadow-2xl flex flex-col overflow-hidden">
               <div className="h-[32px] w-[3px] bg-gray-800 absolute -left-[17px] top-[72px] rounded-l-lg"></div>
               <div className="h-[46px] w-[3px] bg-gray-800 absolute -left-[17px] top-[124px] rounded-l-lg"></div>
               <div className="h-[46px] w-[3px] bg-gray-800 absolute -left-[17px] top-[178px] rounded-l-lg"></div>
               <div className="h-[64px] w-[3px] bg-gray-800 absolute -right-[17px] top-[142px] rounded-r-lg"></div>
               <div className="rounded-[2rem] overflow-hidden w-full h-full bg-white relative">
-                {/* 앱 화면 내용 시뮬레이션 */}
                 <div className="bg-orange-500 h-16 flex items-end pb-3 px-4">
                   <span className="text-white font-bold text-lg">아기밥상</span>
                 </div>
@@ -143,16 +240,8 @@ const AppLandingPage = () => {
                         <div className="w-1/2 h-2 bg-gray-200 rounded"></div>
                       </div>
                     </div>
-                    <div className="h-20 bg-gray-100 rounded-lg flex items-center p-3 gap-3">
-                      <div className="w-12 h-12 bg-gray-300 rounded-full"></div>
-                      <div className="flex-1">
-                        <div className="w-2/3 h-3 bg-gray-300 rounded mb-2"></div>
-                        <div className="w-1/2 h-2 bg-gray-200 rounded"></div>
-                      </div>
-                    </div>
                   </div>
                 </div>
-                {/* 하단 탭바 */}
                 <div className="absolute bottom-0 w-full h-16 bg-white border-t flex justify-around items-center text-gray-400">
                   <div className="text-orange-500 flex flex-col items-center"><ChefHat size={20} /><span className="text-[10px]">홈</span></div>
                   <div className="flex flex-col items-center"><Calendar size={20} /><span className="text-[10px]">식단</span></div>
@@ -201,6 +290,96 @@ const AppLandingPage = () => {
                 <p className="text-gray-600 leading-relaxed">{feature.desc}</p>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ✨ NEW: 육아 톡톡 게시판 섹션 */}
+      <section id="board" className="py-20 bg-yellow-50">
+        <div className="max-w-6xl mx-auto px-4 md:px-6">
+          <div className="text-center mb-12">
+            <div className="inline-block bg-yellow-200 text-yellow-800 px-4 py-1 rounded-full text-sm font-bold mb-4">
+              Community
+            </div>
+            <h3 className="text-3xl md:text-4xl font-bold text-gray-900">육아 톡톡 (Talk Talk)</h3>
+            <p className="mt-3 text-gray-600">
+              앱에 바라는 점이나 육아 꿀팁을 자유롭게 남겨주세요! (실시간 저장됨)
+            </p>
+          </div>
+
+          <div className="flex flex-col lg:flex-row gap-10">
+            {/* 왼쪽: 글쓰기 폼 */}
+            <div className="lg:w-1/3">
+              <div className="bg-white p-6 rounded-2xl shadow-lg border border-yellow-100 sticky top-24">
+                <h4 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                  <MessageCircle className="text-orange-500" /> 글 남기기
+                </h4>
+                <form onSubmit={handleSubmitPost} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-1">닉네임</label>
+                    <div className="relative">
+                      <User className="absolute left-3 top-3 text-gray-400 w-5 h-5" />
+                      <input
+                        type="text"
+                        value={nickname}
+                        onChange={(e) => setNickname(e.target.value)}
+                        placeholder="예: 튼튼맘"
+                        className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none transition bg-gray-50"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-1">내용</label>
+                    <textarea
+                      value={content}
+                      onChange={(e) => setContent(e.target.value)}
+                      placeholder="이유식 시작하려니 막막하네요~ 다들 화이팅입니다!"
+                      rows="4"
+                      className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none transition bg-gray-50 resize-none"
+                    ></textarea>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className={`w-full py-3 rounded-xl font-bold text-white flex items-center justify-center gap-2 transition shadow-md
+                            ${isSubmitting ? 'bg-gray-400 cursor-not-allowed' : 'bg-orange-500 hover:bg-orange-600 hover:-translate-y-0.5'}
+                        `}
+                  >
+                    <Send size={18} /> {isSubmitting ? '등록 중...' : '등록하기'}
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            {/* 오른쪽: 게시글 목록 (포스트잇 스타일) */}
+            <div className="lg:w-2/3">
+              <div className="grid gap-4 sm:grid-cols-2">
+                {posts.length === 0 ? (
+                  <div className="col-span-2 text-center py-10 text-gray-500 bg-white rounded-xl border border-dashed border-gray-300">
+                    아직 등록된 글이 없습니다. 첫 번째 글을 남겨보세요! 📝
+                  </div>
+                ) : (
+                  posts.map((post) => (
+                    <div key={post.id} className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition duration-300 flex flex-col">
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 bg-yellow-100 rounded-full flex items-center justify-center text-yellow-700 font-bold text-xs">
+                            {post.nickname ? post.nickname[0] : '?'}
+                          </div>
+                          <span className="font-bold text-gray-800 text-sm">{post.nickname}</span>
+                        </div>
+                        <span className="text-xs text-gray-400">
+                          {post.createdAt?.seconds ? new Date(post.createdAt.seconds * 1000).toLocaleDateString() : '방금 전'}
+                        </span>
+                      </div>
+                      <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap flex-grow">
+                        {post.content}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -276,7 +455,6 @@ const AppLandingPage = () => {
                 구글 플레이스토어에서 다운로드 <ChevronRight />
               </button>
             </div>
-            {/* 장식용 원 */}
             <div className="absolute -top-24 -right-24 w-64 h-64 bg-yellow-200 rounded-full opacity-50 blur-3xl"></div>
             <div className="absolute -bottom-24 -left-24 w-64 h-64 bg-orange-200 rounded-full opacity-50 blur-3xl"></div>
           </div>
@@ -291,7 +469,7 @@ const AppLandingPage = () => {
               <ChefHat /> 아기밥상
             </div>
             <p className="text-sm mb-2">사업자등록번호: 123-45-67890 | 대표: 홍길동</p>
-            <p className="text-sm">이메일: help@babyfood.com</p>
+            <p className="text-sm">이메일: yahjbc@gmail.com</p>
             <p className="text-xs mt-4 text-gray-500">© 2024 BabyFood App. All rights reserved.</p>
           </div>
           <div className="flex gap-6">
