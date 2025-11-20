@@ -384,7 +384,6 @@ const AppLandingPage = () => {
                 {posts.length === 0 ? (
                   <div className="col-span-2 text-center py-10 text-gray-500 bg-white rounded-xl border border-dashed border-gray-300">
                     아직 등록된 글이 없습니다. 첫 번째 글을 남겨보세요! 📝<br />
-                    (글이 안 보인다면 Firebase 설정이 되었는지 확인해주세요)
                   </div>
                 ) : (
                   posts.map((post) => (
