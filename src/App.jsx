@@ -2,28 +2,35 @@ import React, { useState, useEffect } from 'react';
 import { Download, Star, ChefHat, Calendar, Baby, X, Menu, ChevronRight, CheckCircle, MessageCircle, Send, User } from 'lucide-react';
 import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, query } from "firebase/firestore";
+import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, query, orderBy } from "firebase/firestore";
 
-// --- Firebase 설정 및 초기화 (환경 변수 사용) ---
-const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
-// 로컬 개발 환경 등에서 config가 없을 경우를 대비한 예외 처리 (빈 객체면 초기화 안 함)
+// ------------------------------------------------------------------
+// [중요] 1단계에서 복사한 'firebaseConfig' 내용을 아래 괄호 안에 붙여넣으세요!
+// ------------------------------------------------------------------
+const firebaseConfig = {
+  apiKey: "AIzaSyCdmUliUBDtAA8pWNRdHmqmDPMngHfbV88",
+  authDomain: "agibobsang-web.firebaseapp.com",
+  projectId: "agibobsang-web",
+  storageBucket: "agibobsang-web.firebasestorage.app",
+  messagingSenderId: "390549082726",
+  appId: "1:390549082726:web:93e0b7ba76ab15125bd3a7"
+};
+
+// 앱 초기화 (Config가 비어있지 않을 때만 실행)
 const app = Object.keys(firebaseConfig).length > 0 ? initializeApp(firebaseConfig) : null;
 const auth = app ? getAuth(app) : null;
 const db = app ? getFirestore(app) : null;
-const appId = window.__app_id || 'default-app-id';
 
 const AppLandingPage = () => {
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // 게시판 관련 상태
   const [posts, setPosts] = useState([]);
   const [nickname, setNickname] = useState('');
   const [content, setContent] = useState('');
   const [user, setUser] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // 스크롤 감지
   useEffect(() => {
     const handleScroll = () => {
       if (window.scrollY > 10) setIsScrolled(true);
@@ -33,83 +40,65 @@ const AppLandingPage = () => {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // --- Firebase Auth 및 데이터 로드 ---
+  // Firebase 인증 및 데이터 로드
   useEffect(() => {
     if (!auth) return;
 
-    // 1. 익명 로그인 시도
-    const initAuth = async () => {
-      try {
-        await signInAnonymously(auth);
-      } catch (error) {
-        console.error("Auth Error:", error);
-      }
-    };
-    initAuth();
+    signInAnonymously(auth).catch((error) => console.error("Auth Error:", error));
 
-    // 2. 인증 상태 확인
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+    return onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
     });
-
-    return () => unsubscribeAuth();
   }, []);
 
-  // 3. 게시글 실시간 동기화 (로그인 된 상태에서만)
+  // 게시글 실시간 동기화
   useEffect(() => {
-    if (!user || !db) return;
+    if (!db) return;
 
-    // 경로 규칙 준수: artifacts/{appId}/public/data/board_posts
-    const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'board_posts');
+    // 내 프로젝트이므로 경로를 단순하게 'board_posts'로 사용합니다.
+    // (주의: Firestore에서 컬렉션 ID를 'board_posts'로 자동 생성합니다)
+    const postsRef = collection(db, 'board_posts');
 
-    // 쿼리: 정렬은 JS에서 처리 (복합 쿼리 제한 때문)
+    // 쿼리: 시간순 정렬 (JS에서 처리하거나 인덱스 생성 후 orderBy 사용)
+    // 여기서는 간단하게 데이터를 가져온 후 클라이언트에서 정렬합니다.
     const q = query(postsRef);
 
-    const unsubscribeData = onSnapshot(q, (snapshot) => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const loadedPosts = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-      // 최신순 정렬 (createdAt 기준 내림차순)
-      loadedPosts.sort((a, b) => {
-        const dateA = a.createdAt?.seconds || 0;
-        const dateB = b.createdAt?.seconds || 0;
-        return dateB - dateA;
-      });
+      // 최신순 정렬
+      loadedPosts.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setPosts(loadedPosts);
-    }, (error) => {
-      console.error("Data Fetch Error:", error);
     });
 
-    return () => unsubscribeData();
-  }, [user]);
+    return () => unsubscribe();
+  }, [db]);
 
-  // --- 게시글 작성 핸들러 ---
   const handleSubmitPost = async (e) => {
     e.preventDefault();
     if (!content.trim() || !nickname.trim()) {
       alert("닉네임과 내용을 모두 입력해주세요!");
       return;
     }
-    if (!db || !user) {
-      alert("게시판 서버 연결 중입니다. 잠시 후 다시 시도해주세요.");
+    if (!db) {
+      alert("Firebase 설정이 완료되지 않았습니다. 코드를 확인해주세요.");
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'board_posts');
-      await addDoc(postsRef, {
+      await addDoc(collection(db, 'board_posts'), {
         nickname: nickname,
         content: content,
         createdAt: serverTimestamp(),
-        uid: user.uid // 작성자 구분용 (선택)
+        uid: user ? user.uid : 'anonymous'
       });
-      setContent(''); // 내용 초기화 (닉네임은 유지)
-      // alert("글이 등록되었습니다!"); 
+      setContent('');
     } catch (error) {
-      console.error("Write Error:", error);
-      alert("글 작성에 실패했습니다.");
+      console.error("Error adding document: ", error);
+      alert("글 작성 실패! (Firestore 규칙을 확인하세요)");
     } finally {
       setIsSubmitting(false);
     }
@@ -139,7 +128,6 @@ const AppLandingPage = () => {
             <span className="text-xl font-bold text-orange-900 tracking-tight">아기밥상</span>
           </div>
 
-          {/* 데스크탑 메뉴 */}
           <div className="hidden md:flex space-x-8 items-center">
             <button onClick={() => scrollToSection('features')} className="text-gray-600 hover:text-orange-500 transition font-medium">주요 기능</button>
             <button onClick={() => scrollToSection('board')} className="text-gray-600 hover:text-orange-500 transition font-medium flex items-center gap-1"><MessageCircle size={18} /> 육아톡톡</button>
@@ -149,7 +137,6 @@ const AppLandingPage = () => {
             </button>
           </div>
 
-          {/* 모바일 메뉴 버튼 */}
           <div className="md:hidden">
             <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="text-gray-600">
               {mobileMenuOpen ? <X size={28} /> : <Menu size={28} />}
@@ -157,7 +144,6 @@ const AppLandingPage = () => {
           </div>
         </div>
 
-        {/* 모바일 메뉴 드롭다운 */}
         {mobileMenuOpen && (
           <div className="md:hidden bg-white absolute top-full left-0 w-full shadow-lg border-t border-gray-100 flex flex-col p-4 space-y-4">
             <button onClick={() => scrollToSection('features')} className="text-left text-gray-600 font-medium py-2">주요 기능</button>
@@ -206,7 +192,6 @@ const AppLandingPage = () => {
           </div>
 
           <div className="md:w-1/2 z-10 relative">
-            {/* 앱 목업 이미지 */}
             <div className="relative mx-auto border-gray-800 bg-gray-800 border-[14px] rounded-[2.5rem] h-[600px] w-[300px] shadow-2xl flex flex-col overflow-hidden">
               <div className="h-[32px] w-[3px] bg-gray-800 absolute -left-[17px] top-[72px] rounded-l-lg"></div>
               <div className="h-[46px] w-[3px] bg-gray-800 absolute -left-[17px] top-[124px] rounded-l-lg"></div>
@@ -233,6 +218,13 @@ const AppLandingPage = () => {
                     </div>
                   </div>
                   <div className="space-y-3">
+                    <div className="h-20 bg-gray-100 rounded-lg flex items-center p-3 gap-3">
+                      <div className="w-12 h-12 bg-gray-300 rounded-full"></div>
+                      <div className="flex-1">
+                        <div className="w-2/3 h-3 bg-gray-300 rounded mb-2"></div>
+                        <div className="w-1/2 h-2 bg-gray-200 rounded"></div>
+                      </div>
+                    </div>
                     <div className="h-20 bg-gray-100 rounded-lg flex items-center p-3 gap-3">
                       <div className="w-12 h-12 bg-gray-300 rounded-full"></div>
                       <div className="flex-1">
@@ -294,7 +286,7 @@ const AppLandingPage = () => {
         </div>
       </section>
 
-      {/* ✨ NEW: 육아 톡톡 게시판 섹션 */}
+      {/* ✨ 육아 톡톡 게시판 섹션 */}
       <section id="board" className="py-20 bg-yellow-50">
         <div className="max-w-6xl mx-auto px-4 md:px-6">
           <div className="text-center mb-12">
@@ -351,12 +343,13 @@ const AppLandingPage = () => {
               </div>
             </div>
 
-            {/* 오른쪽: 게시글 목록 (포스트잇 스타일) */}
+            {/* 오른쪽: 게시글 목록 */}
             <div className="lg:w-2/3">
               <div className="grid gap-4 sm:grid-cols-2">
                 {posts.length === 0 ? (
                   <div className="col-span-2 text-center py-10 text-gray-500 bg-white rounded-xl border border-dashed border-gray-300">
-                    아직 등록된 글이 없습니다. 첫 번째 글을 남겨보세요! 📝
+                    아직 등록된 글이 없습니다. 첫 번째 글을 남겨보세요! 📝<br />
+                    (글이 안 보인다면 Firebase 설정이 되었는지 확인해주세요)
                   </div>
                 ) : (
                   posts.map((post) => (
@@ -469,7 +462,7 @@ const AppLandingPage = () => {
               <ChefHat /> 아기밥상
             </div>
             <p className="text-sm mb-2">사업자등록번호: 123-45-67890 | 대표: 홍길동</p>
-            <p className="text-sm">이메일: yahjbc@gmail.com</p>
+            <p className="text-sm">이메일: help@babyfood.com</p>
             <p className="text-xs mt-4 text-gray-500">© 2024 BabyFood App. All rights reserved.</p>
           </div>
           <div className="flex gap-6">
